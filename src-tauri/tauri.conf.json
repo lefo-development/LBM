@@ -13,8 +13,12 @@
     "windows": [
       {
         "title": "Lefo Bot Manager [LBM]",
-        "width": 800,
-        "height": 600
+        "width": 1280,
+        "height": 800,
+        "maximizable": true,
+        "maximized": true,
+        "resizable": true,
+        "center": true
       }
     ],
     "security": {

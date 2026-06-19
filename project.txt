@@ -1,0 +1,95 @@
+# MASTER PROMPT: "LEFO BOT STUDIO" - YEREL BOT GELİŞTİRME VE BARINDIRMA STÜDYOSU
+
+Sen kıdemli bir Yazılım Mimarı ve Full-Stack (Tauri, Rust, TypeScript, Node.js, Database) Geliştiricisisin. Senden, aşağıda tüm detayları, mimarisi, güvenlik protokolleri ve MVP isterleri belirtilen "Lefo Bot Studio" isimli masaüstü uygulamasını adım adım, modüler ve temiz kod (Clean Code) prensiplerine uygun olarak geliştirmeni istiyorum.
+
+---
+
+## 1. PROJE VİZYONU VE GENEL ÖZET
+"Lefo Bot Studio", kullanıcıların kendi bilgisayarlarında çalışan, tamamen yerel (local) bir Discord (ve gelecekte Minecraft vb.) bot geliştirme, yönetim ve barındırma platformudur. Uygulama, Docker Desktop veya XAMPP mantığıyla çalışarak yerel dilleri/veritabanlarını yönetir. En kritik odak noktaları: Üst düzey yerel güvenlik (AES-256), tam modülerlik (Middleware mimarili eklenti sistemi), performans ve taşınabilirliktir (.lefo uzantılı profil export/import).
+
+---
+
+## 2. TEKNOLOJİ YIĞINI (TECH STACK)
+*   **Masaüstü İskeleti:** Tauri (Rust tabanlı backend + TypeScript frontend).
+*   **Arayüz (Frontend):** React (veya Svelte/Vue) + Vite + Tailwind CSS + Lucide Icons (Arayüz modern, karanlık tema ağırlıklı ve geliştirici dostu olmalıdır).
+*   **Çekirdek Bot (Core Bot):** Node.js (TypeScript) ile yazılmış, Tauri tarafından bir `Child Process` (Rust sidecar/std::process::Command) olarak tetiklenen bağımsız çalışma motoru.
+*   **Entegre Editör:** Monaco Editor (VS Code altyapısı).
+*   **Veritabanı Katmanı:** Esnek Hibrit Yapı (SQLite veya PostgreSQL). SQLite hızlı ve sıfır kurulumlu yerel işler için sunulurken, PostgreSQL ölçeklenebilirlik için "Önerilen Sistem" olarak gösterilecektir.
+*   **Şifreleme:** AES-256-GCM (Yerel verileri ve hassas tokenları şifrelemek için) ve RSA Asymmetric Cryptography (Eklenti imzalama için).
+
+---
+
+## 3. DETAYLI SİSTEM BİLEŞENLERİ VE MİMARİ
+
+### A. Profil / Çalışma Alanı (Workspace) Yönetimi
+Uygulama açılışında bir "Profil Seçici" ekranı karşılar. Kullanıcıya iki profil tipi sunulur:
+1.  **Korumalı Profil (Şifreli):** Kullanıcı bir kullanıcı adı ve güçlü bir parola belirler. Profil verileri, şifreleme anahtarları ve bot tokenları bu parola kullanılarak şifrelenir. Uygulama her açıldığında parola sorulur. Parola kaybolursa veriler kurtarılamaz (isteğe bağlı 12 kelimelik Recovery Phrase sunulabilir).
+2.  **Standart Profil (Şifresiz):** Hızlı erişim için kullanıcı adı girilir, parola istenmez. Otomatik giriş yapılır ancak güvenlik minimumdur.
+*   **Profil Dışa/İçe Aktarım (.lefo formatı):** Profiller tüm klasör yapıları, konfigürasyonları ve kodlarıyla birlikte sıkıştırılıp (tar.gz/zip) `.lefo` uzantısıyla paketlenir. İçe aktarılırken eğer profil şifreliyse, şifre çözme parolası istenir.
+
+### B. Güvenlik ve AES-256 Şifreleme Protokolü
+*   Veritabanında (SQLite veya PostgreSQL) saklanan Discord Bot Tokenları, API anahtarları ve kritik config verileri düz metin (plain text) olarak asla tutulamaz.
+*   Korumalı profillerde, kullanıcının parolası PBKDF2 veya Argon2id kullanılarak hash'lenir ve bir şifreleme anahtarı (encryption key) türetilir.
+*   Tüm hassas sütunlar veritabanına yazılmadan önce **AES-256-GCM** algoritması ile şifrelenir. Veritabanı dosyası fiziksel olarak çalınsa bile, saldırgan için tamamen işlevsiz ve okunamaz olur.
+
+### C. Environment Manager (Çevre Yöneticisi)
+*   Tauri Rust backend'i, kullanıcının işletim sistemini tarayarak `Node.js`, `Python`, `SQLite` ve `PostgreSQL` gibi servislerin kurulu olup olmadığını algılar.
+*   Arayüzde şık bir "Sistem Durumu" paneli gösterilir. Eksik servisler için "Kurulum Kılavuzu" ve otomatik silent-install (sessiz kurulum) betikleri/butonları sunulur.
+*   Uygulamanın çalışması için yerel bir veritabanı (tercihen SQLite veya sistemde kurulu PostgreSQL) aktif olmalıdır.
+
+### D. "Sağlam Beyin" (Core Bot) & Middleware Mimarisi
+Core Bot, eklentilerin karmaşık güvenlik ve limit işlemlerini üstlenen ana mekanizmadır.
+*   **Dynamic Plugin Loader:** Bot çalışırken `plugins/` klasörünü tarar ve `dynamic import` kullanarak eklentileri çalışma zamanında (runtime) yükler.
+*   **Ara Katman (Middleware):** Eklenti yazarı cooldown, yetki kontrolü veya sunucu bazlı ayarları düşünmez. Gelen tüm komut/mesaj istekleri önce Core Bot'un ara katmanına gelir. Ara katman veritabanından (Guild ID bazlı) şu kontrolleri yapar:
+    *   *Bu sunucuda bu komut aktif mi?*
+    *   *Bu sunucu için belirlenen cooldown (bekleme süresi) doldu mu? (A sunucusunda 5sn, B sunucusunda 60sn olabilir).*
+    *   *Kullanıcı yetkili rol grubunda mı?*
+    Şartlar sağlanıyorsa eklentinin `execute()` fonksiyonu tetiklenir, sağlanmıyorsa standart hata mesajı döner.
+*   **Yerel API (İletişim):** Tauri paneli ile Core Bot arasında anlık senkronizasyon için hafif bir localhost API'si (veya Tauri IPC stdin/stdout kanalı) kurulur. Panelde yapılan bir ayar değişikliği bota anında yansıtılır, botun yeniden başlatılması gerekmez.
+
+### E. Eklenti (Plugin) Sistemi ve Dijital İmza (.lefo)
+*   Her eklenti katı bir manifest yapısına sahip olmalıdır:
+    ```typescript
+    export const manifest = {
+        name: "Eklenti Adı",
+        version: "1.0.0",
+        description: "Açıklama",
+        commandName: "komut-adi",
+        defaultSettings: { cooldown: 10, adminOnly: false }
+    };
+    export async function execute(context: any, args: string[]) { ... }
+    ```
+*   **Dijital İmzalama (Asymmetric Cryptography):** Resmi eklentilerin güvenliğini ve orijinalliğini korumak için Asimetrik Şifreleme kullanılır. Geliştirici (sen) eklentiyi kendi `Private Key`'i ile imzalar. Uygulama içine gömülü `Public Key` ile bu imza doğrulanır.
+    *   İmza geçerliyse: Arayüzde **"Yeşil Tik: Güvenilir/Resmi Lefo Eklentisi"** ibaresi çıkar.
+    *   İmza geçersiz veya kod modifiye edilmişse: **"Sarı Uyarı: Üçüncü Taraf / Doğrulanmamış Eklenti"** uyarısı gösterilir.
+
+### F. Entegre Kod Editörü ve Sürüm Kontrolü (Git-like Backup)
+*   Uygulama içinde tam teşekküllü bir **Monaco Editor** barındırılır. Kullanıcılar eklenti kodlarını doğrudan uygulama içinden düzenleyebilir.
+*   Kullanıcı kodu bozduğunda paniğe kapılmaması için basitleştirilmiş bir sürüm kontrolü (Git-like backup) sunulur. "Kaydet" butonunun yanında bir **"Son Çalışan Sürüme Geri Dön"** (Restore Last Working Version) seçeneği bulunur. Sistem, botun hatasız şekilde ayağa kalktığı son başarılı durumun kod yedeğini otomatik olarak arkada saklar.
+
+### G. Auto-Updater (GitHub Releases)
+*   Tauri'nin yerleşik otomatik güncelleyicisi kullanılır. Proje GitHub Releases ile entegre edilir.
+*   Uygulama her açıldığında arka planda GitHub API'sini sorgulayarak yeni bir sürüm olup olmadığını denetler. Yeni sürüm varsa değişiklik notlarını gösterir, tek tıkla güncellemeyi indirip kurar ve uygulamayı yeniden başlatır (kullanıcı verileri/profilleri korunur).
+
+---
+
+## 4. PROJE DOSYA YAPISI (PROPOSED DIRECTORY STRUCTURE)
+```text
+lefo-bot-studio/
+├── src-tauri/                 # Tauri Rust Arka Planı
+│   ├── src/
+│   │   ├── main.rs            # İşletim sistemi komutları, veritabanı kontrolleri, şifreleme yardımcıları
+│   │   └── security.rs        # AES-256 ve RSA imza doğrulama mantığı
+│   └── tauri.conf.json        # Auto-updater ve sidecar tanımlamaları
+├── src/                       # Frontend (React + TS)
+│   ├── components/            # Ortak bileşenler (Console, Editor, ProfileCard)
+│   ├── pages/                 # ProfileSelector, Dashboard, EnvironmentManager, CodeEditor
+│   ├── utils/                 # Frontend tarafı şifreleme ve API yardımcıları
+│   └── App.tsx
+└── core-bot/                  # Bağımsız Çalışan Çekirdek Bot Projesi (TS)
+    ├── src/
+    │   ├── index.ts           # Giriş noktası, Plugin Loader, Local API Server
+    │   ├── middleware.ts      # Cooldown, Yetki, Guild ayar kontrolleri
+    │   └── db.ts              # SQLite/Postgres bağlantı katmanı (Kriptolu veri okuma)
+    ├── plugins/               # Dinamik eklentilerin barınacağı klasör
+    └── package.json
